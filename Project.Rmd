@@ -1,74 +1,66 @@
-Remove variables that we believe have too many NA values
-training.dena <- trainingOrg[ , colSums(is.na(trainingOrg)) == 0]
-#head(training1)
-#training3 <- training.decor[ rowSums(is.na(training.decor)) == 0, ]
-dim(training.dena)
+Practical Machine Learning Assignment
+The data consists of a set of readings from sensors attached to subjects performing a variety of exercises. The task is to build a model which will correctly classify activities, given unlabelled sets of readings.
 
-Remove unrelevant variables There are some unrelevant variables that can be removed as they are unlikely to be related to dependent variable.
-remove = c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window', 'num_window')
-training.dere <- training.dena[, -which(names(training.dena) %in% remove)]
-dim(training.dere)
+Load the Caret library and set the random number generator's seed, to ensure reproducibility:
 
-Check the variables that have extremely low variance (this method is useful nearZeroVar() )
 library(caret)
-## Loading required package: lattice
-## Loading required package: ggplot2
-# only numeric variabls can be evaluated in this way.
+set.seed(1234)
+Reading and Cleaning the Data
 
-zeroVar= nearZeroVar(training.dere[sapply(training.dere, is.numeric)], saveMetrics = TRUE)
-training.nonzerovar = training.dere[,zeroVar[, 'nzv']==0]
-dim(training.nonzerovar
+Read the data, inserting NAs from the string "NA" and empty fields; trim whitespace in other fields so R treats them correctly as numeric.
 
-Remove highly correlated variables 90% (using for example findCorrelation() )
-corrMatrix <- cor(na.omit(training.nonzerovar[sapply(training.nonzerovar, is.numeric)]))
-dim(corrMatrix)
-## [1] 52 52
-# there are 52 variables.
-corrDF <- expand.grid(row = 1:52, col = 1:52)
-corrDF$correlation <- as.vector(corrMatrix)
-levelplot(correlation ~ row+ col, corrDF)
+rawData <- read.csv("pml-training.csv", na.strings=c("NA",""), strip.white=T)
+dim(rawData)
+The data frame returned by reading the file has nearly 20,000 rows and 160 columns so ruthlessly discard any column with an NA, as well as metadata and time-related ones.
 
-Split data to training and testing for cross validation.
-inTrain <- createDataPartition(y=training.decor$classe, p=0.7, list=FALSE)
-training <- training.decor[inTrain,]; testing <- training.decor[-inTrain,]
-dim(training);dim(testing)
-## [1] 13737    46
-## [1] 5885   46
+isNA <- apply(rawData, 2, function(x) { sum(is.na(x)) })
+validData <- subset(rawData[, which(isNA == 0)], 
+                    select=-c(X, user_name, new_window, num_window, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+dim(validData)
+OK, so we've got rid of 2/3s of the columns. Let's partition the data into training and test sets. (The classe column is the outcome --- the dataset was from Brazil.)
 
-Random forests build lots of bushy trees, and then average them to reduce the variance.
-require(randomForest)
-## Loading required package: randomForest
-## randomForest 4.6-7
-## Type rfNews() to see new features/changes/bug fixes.
-set.seed(12345)
-Lets fit a random forest and see how well it performs.
-rf.training=randomForest(classe~.,data=training,ntree=100, importance=TRUE)
-rf.training
-## 
-## Call:
-##  randomForest(formula = classe ~ ., data = training, ntree = 100,      importance = TRUE) 
-##                Type of random forest: classification
-##                      Number of trees: 100
-## No. of variables tried at each split: 6
-## 
-##         OOB estimate of  error rate: 0.72%
-## Confusion matrix:
-##      A    B    C    D    E class.error
-## A 3899    4    0    1    2 0.001792115
-## B   23 2622   13    0    0 0.013544018
-## C    0   13 2379    4    0 0.007095159
-## D    0    0   27 2224    1 0.012433393
-## E    0    1    2    8 2514 0.004356436
-#plot(rf.training, log="y")
-varImpPlot(rf.training,)
+inTrain <- createDataPartition(validData$classe, p=0.7, list=F)
+training <- validData[inTrain,]
+testing <- validData[-inTrain,]
+Training a Random Forest Model
 
-Our Random Forest model shows OOB estimate of error rate: 0.72% for the training data. Now we will predict it for out-of sample accuracy.
-Now lets evaluate this tree on the test data.
+Now train a Random Forest model on the training set. (Using this particular combination of trControl parameters is important, as by default bootstrapping is used, which is very time-intensive.)
 
-Now we can predict the testing data from the website.
-answers <- predict(rf.training, testingOrg)
-answers
-##  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 
-##  B  A  B  A  A  E  D  B  A  A  B  C  B  A  E  E  A  B  B  B 
-## Levels: A B C D E
+ctrl <- trainControl(allowParallel=T, method="cv", number=4)
+model <- train(classe ~ ., data=training, model="rf", trControl=ctrl)
+pred <- predict(model, newdata=testing)
+Check the predictions against the held-back test-set.
 
+sum(pred == testing$classe) / length(pred)
+confusionMatrix(testing$classe, pred)$table
+So our trained model is 99.4% accurate against our test-set and this is confirmed by the confusion matrix. Let's use this super-accurate model to predict the unknown labels.
+
+rawTestData <- read.csv("pml-testing.csv", na.strings=c("NA",""), strip.white=T)
+validTestData <- subset(rawTestData[, which(isNA == 0)], 
+                        select=-c(X, user_name, new_window, num_window, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+predict(model, newdata=validTestData)
+Which variables are most important in this model?
+
+varImp(model)
+Training a smaller Random Forest Model
+
+Let's train and test a simpler model using only the top-ten most-important predictors.
+
+smallValidData <- subset(validData, 
+                    select=c(roll_belt, pitch_forearm, yaw_belt, magnet_dumbbell_y, pitch_belt, magnet_dumbbell_z, roll_forearm, accel_dumbbell_y, roll_dumbbell, magnet_dumbbell_x,classe))
+smallModel <- train(classe ~ ., data=smallValidData[inTrain,], model="rf", trControl=ctrl)
+This is 5x faster and gets the same (correct) answer. Its accuracy on the test set is 98.5%.
+
+predict(smallModel, newdata=validTestData)
+smallPred <- predict(smallModel, newdata=testing)
+sum(smallPred == testing$classe) / length(smallPred)
+confusionMatrix(testing$classe, smallPred)$table
+Training a Support Vector Machine
+
+Just for the hell of it, let's train an SVM on the top-ten predictors.
+
+svm <- train(classe ~ ., data=smallValidData[inTrain,], model="svm", trControl=ctrl)
+svmPred <- predict(svm, newdata=testing)
+sum(svmPred == testing$classe) / length(svmPred)
+confusionMatrix(testing$classe, svmPred)$table
+It also scores 98.4% accuracy and its confusion matrix is only slightly less accurate than the simpler Random Forest model's.
